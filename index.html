@@ -158,6 +158,7 @@
         let snake, foods, score, direction, dx, dy, baseHue, gameOver;
         let pixelShape, cellRadius, pixelSizeRatio, gameSpeed;
         let roundHue;
+        let fireworks = [];
 
         function setLanguage(lang) {
             const L = LANGS[lang];
@@ -170,6 +171,9 @@
             shapeSelect.querySelector('option[value="round"]').textContent = L.shapeRound;
             shapeSelect.querySelector('option[value="square"]').textContent = L.shapeSquare;
             scoreEl.textContent = `${L.score}: ${score}`;
+            if (gameOver) {
+                finalScoreEl.textContent = `${L.finalScore}: ${score}`;
+            }
         }
 
         function init() {
@@ -182,11 +186,12 @@
             baseHue = Math.random() * 360;
             gameOver = false;
             roundHue = Math.random() * 360;
+            fireworks = [];
             
             setLanguage(langSelect.value);
             gameOverEl.style.display = 'none';
             
-            placeFoods();
+            placeFood();
             gameLoop();
         }
 
@@ -207,33 +212,27 @@
              speedVal.textContent = 5;
         }
         
-        function placeFoods() {
+        function placeFood() {
             foods = [];
-            const numFoods = 3;
-            const lifespans = [500, 1500, 3500]; // 0.2s, 1s, 3s
+            const lifespan = 3000; // 3s
             const currentTime = performance.now();
 
-            for (let i = 0; i < numFoods; i++) {
-                let foodPlaced = false;
-                let newFood;
-                while (!foodPlaced) {
-                    newFood = {
-                        x: Math.floor(Math.random() * gridSize),
-                        y: Math.floor(Math.random() * gridSize),
-                        color: `hsl(${roundHue}, 90%, ${60 + i * 10}%)`,
-                        disappearTime: currentTime + lifespans[i],
-                        lifespan: lifespans[i]
-                    };
-                    
-                    const onSnake = snake.some(segment => segment.x === newFood.x && segment.y === newFood.y);
-                    const onOtherFood = foods.some(f => f.x === newFood.x && f.y === newFood.y);
-                    
-                    if (!onSnake && !onOtherFood) {
-                        foodPlaced = true;
-                    }
+            let foodPlaced = false;
+            let newFood;
+            while (!foodPlaced) {
+                newFood = {
+                    x: Math.floor(Math.random() * gridSize),
+                    y: Math.floor(Math.random() * gridSize),
+                    color: `hsl(${roundHue}, 90%, 70%)`,
+                    disappearTime: currentTime + lifespan,
+                };
+                
+                const onSnake = snake.some(segment => segment.x === newFood.x && segment.y === newFood.y);
+                if (!onSnake) {
+                    foodPlaced = true;
                 }
-                foods.push(newFood);
             }
+            foods.push(newFood);
         }
 
         function gameLoop() {
@@ -246,11 +245,10 @@
             const gameLogic = () => {
                 const currentTime = performance.now();
                 
-                const oldFoodCount = foods.length;
                 foods = foods.filter(f => f.disappearTime > currentTime);
 
-                if (foods.length === 0 && oldFoodCount > 0 && !gameOver) {
-                    placeFoods();
+                if (foods.length === 0 && !gameOver) {
+                    placeFood();
                 }
 
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -276,10 +274,13 @@
                 for (let i = 0; i < foods.length; i++) {
                     if (head.x === foods[i].x && head.y === foods[i].y) {
                         score++;
-                        scoreEl.textContent = `Score: ${score}`;
+                        scoreEl.textContent = `${LANGS[langSelect.value].score}: ${score}`;
                         eatenFoodColor = foods[i].color;
-                        placeFoods();
+                        placeFood();
                         ateFood = true;
+                        if (score > 0 && score % 10 === 0) {
+                            triggerFireworks(3, eatenFoodColor);
+                        }
                         break;
                     }
                 }
@@ -309,9 +310,8 @@
                 
                 // Blink when less than 1 second left
                 if (timeLeft < 1000) {
-                    // Faster blink for shorter lifespan
-                    const blinkSpeed = 250 - (f.lifespan / 3000 * 200);
-                    show = (currentTime % blinkSpeed) < (blinkSpeed / 2);
+                    // Slow blink
+                    show = Math.floor(currentTime / 250) % 2 === 0;
                 }
 
                 if (show) {
@@ -335,6 +335,60 @@
                 const segmentOffset = (cellSize - segmentSize) / 2;
                 fillRoundRect(ctx, segment.x * cellSize + segmentOffset, segment.y * cellSize + segmentOffset, segmentSize, segmentSize, cellRadius);
             });
+            
+            // Draw fireworks
+            ctx.save();
+            for (let i = fireworks.length - 1; i >= 0; i--) {
+                const fw = fireworks[i];
+                const elapsedTime = currentTime - fw.startTime;
+
+                if (elapsedTime > fw.duration) {
+                    fireworks.splice(i, 1);
+                    continue;
+                }
+
+                const maxRing = 3;
+                for (let ring = 0; ring <= maxRing; ring++) {
+                    const ringStartTime = ring * fw.ringDelay;
+                    if (elapsedTime >= ringStartTime) {
+                        const timeSinceRingStart = elapsedTime - ringStartTime;
+                        if (timeSinceRingStart < fw.ringDuration) {
+                            const alpha = 1.0 - (timeSinceRingStart / fw.ringDuration);
+                            drawExplosionRing(fw.cx, fw.cy, ring, fw.baseHue, alpha);
+                        }
+                    }
+                }
+            }
+            ctx.restore();
+        }
+
+        function drawExplosionRing(cx, cy, ring, baseHue, alpha) {
+            const ringHue = (baseHue + ring * 20) % 360;
+            const color = `hsl(${ringHue}, 90%, 70%)`;
+            ctx.fillStyle = color;
+            ctx.globalAlpha = alpha;
+        
+            const drawCell = (x, y) => {
+                if (x >= 0 && x < gridSize && y >= 0 && y < gridSize) {
+                    const size = cellSize * pixelSizeRatio;
+                    const offset = (cellSize - size) / 2;
+                    fillRoundRect(ctx, x * cellSize + offset, y * cellSize + offset, size, size, cellRadius);
+                }
+            };
+        
+            if (ring === 0) {
+                drawCell(cx, cy);
+                return;
+            }
+        
+            for (let x = cx - ring; x <= cx + ring; x++) {
+                drawCell(x, cy - ring);
+                if (ring > 0) drawCell(x, cy + ring);
+            }
+            for (let y = cy - ring + 1; y < cy + ring; y++) {
+                drawCell(cx - ring, y);
+                if (ring > 0) drawCell(cx + ring, y);
+            }
         }
 
         function fillRoundRect(ctx, x, y, w, h, r) {
@@ -356,12 +410,37 @@
             ctx.fill();
         }
         
+        function triggerFireworks(count = 1, baseColor = null) {
+            for (let i = 0; i < count; i++) {
+                let hue = roundHue;
+                if (baseColor) {
+                    const match = baseColor.match(/hsl\((\d+)/);
+                    if (match) {
+                        hue = parseInt(match[1]);
+                    }
+                }
+        
+                fireworks.push({
+                    cx: Math.floor(Math.random() * gridSize),
+                    cy: Math.floor(Math.random() * gridSize),
+                    baseHue: hue,
+                    startTime: performance.now(),
+                    duration: 1000,
+                    ringDelay: 100,
+                    ringDuration: 600
+                });
+            }
+        }
+
         document.addEventListener('keydown', e => {
             const key = e.key.toLowerCase();
             if (key === 'w' && direction !== 'down') { direction = 'up'; dx = 0; dy = -1; }
             if (key === 's' && direction !== 'up') { direction = 'down'; dx = 0; dy = 1; }
             if (key === 'a' && direction !== 'right') { direction = 'left'; dx = -1; dy = 0; }
             if (key === 'd' && direction !== 'left') { direction = 'right'; dx = 1; dy = 0; }
+            if (key === 'j') {
+                triggerFireworks(1);
+            }
         });
 
         langSelect.onchange = (e) => {
