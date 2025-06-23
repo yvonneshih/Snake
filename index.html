@@ -64,6 +64,16 @@
             display: inline-block;
             text-align: center;
         }
+        .game-buttons button {
+            background: #b85c5c;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 6px 18px;
+            font-size: 1em;
+            margin: 0 6px;
+            cursor: pointer;
+        }
         .lang-select {
             position: absolute;
             top: 20px;
@@ -103,11 +113,17 @@
             <input type="range" id="speedSlider" min="1" max="10" step="1" value="5">
             <span id="speedVal">5</span>
         </div>
+        <div class="controls-row game-buttons">
+            <button id="pauseBtn">Pause</button>
+            <button id="playBtn">Play</button>
+        </div>
     </div>
     <div id="score">Score: 0</div>
+    <div id="missedCounter" style="margin-top: 5px; font-size: 1.2em;">Missed: 0</div>
     <div id="gameOver">
         <span id="gameOverText">Game Over! Click to Restart</span><br>
-        <span id="finalScore"></span>
+        <span id="finalScore"></span><br>
+        <span id="finalMissed"></span>
     </div>
 
     <script>
@@ -123,6 +139,9 @@
                 speedLabel: "Speed",
                 shapeRound: "Round",
                 shapeSquare: "Square",
+                playBtn: "Play",
+                pauseBtn: "Pause",
+                missed: "Missed"
             },
             zh: {
                 title: "渐变贪吃蛇",
@@ -135,6 +154,9 @@
                 speedLabel: "速度",
                 shapeRound: "圆形",
                 shapeSquare: "方形",
+                playBtn: "播放",
+                pauseBtn: "暂停",
+                missed: "错过"
             }
         };
 
@@ -143,6 +165,8 @@
         const scoreEl = document.getElementById('score');
         const gameOverEl = document.getElementById('gameOver');
         const finalScoreEl = document.getElementById('finalScore');
+        const finalMissedEl = document.getElementById('finalMissed');
+        const missedCounterEl = document.getElementById('missedCounter');
         const shapeSelect = document.getElementById('shapeSelect');
         const radiusSlider = document.getElementById('radiusSlider');
         const radiusVal = document.getElementById('radiusVal');
@@ -151,14 +175,15 @@
         const speedSlider = document.getElementById('speedSlider');
         const speedVal = document.getElementById('speedVal');
         const langSelect = document.getElementById('langSelect');
+        const playBtn = document.getElementById('playBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
 
         const gridSize = 8;
         const cellSize = canvas.width / gridSize;
 
-        let snake, foods, score, direction, dx, dy, baseHue, gameOver;
+        let snake, foods, score, direction, dx, dy, baseHue, gameOver, isPaused;
         let pixelShape, cellRadius, pixelSizeRatio, gameSpeed;
-        let roundHue;
-        let fireworks = [];
+        let roundHue, missedFoods, missedFoodCount;
 
         function setLanguage(lang) {
             const L = LANGS[lang];
@@ -170,23 +195,29 @@
             document.getElementById('speedLabel').textContent = L.speedLabel;
             shapeSelect.querySelector('option[value="round"]').textContent = L.shapeRound;
             shapeSelect.querySelector('option[value="square"]').textContent = L.shapeSquare;
+            playBtn.textContent = L.playBtn;
+            pauseBtn.textContent = L.pauseBtn;
             scoreEl.textContent = `${L.score}: ${score}`;
+            missedCounterEl.textContent = `${L.missed}: ${missedFoodCount}`;
             if (gameOver) {
                 finalScoreEl.textContent = `${L.finalScore}: ${score}`;
+                finalMissedEl.textContent = `${L.missed}: ${missedFoodCount}`;
             }
         }
 
         function init() {
             snake = [{x: 4, y: 4, color: null}];
             foods = [];
+            missedFoods = [];
+            missedFoodCount = 0;
             score = 0;
             direction = 'right';
             dx = 1;
             dy = 0;
             baseHue = Math.random() * 360;
             gameOver = false;
+            isPaused = false;
             roundHue = Math.random() * 360;
-            fireworks = [];
             
             setLanguage(langSelect.value);
             gameOverEl.style.display = 'none';
@@ -238,16 +269,39 @@
         function gameLoop() {
             if (gameOver) {
                 finalScoreEl.textContent = `${LANGS[langSelect.value].finalScore}: ${score}`;
+                finalMissedEl.textContent = `${LANGS[langSelect.value].missed}: ${missedFoodCount}`;
                 gameOverEl.style.display = 'block';
+                return;
+            }
+            
+            if (isPaused) {
+                setTimeout(gameLoop, gameSpeed);
                 return;
             }
 
             const gameLogic = () => {
                 const currentTime = performance.now();
                 
-                foods = foods.filter(f => f.disappearTime > currentTime);
+                const activeFoods = [];
+                foods.forEach(f => {
+                    if (f.disappearTime > currentTime) {
+                        activeFoods.push(f);
+                    } else {
+                        missedFoodCount++;
+                        missedFoods.push({
+                            x: f.x,
+                            y: f.y,
+                            disappearTime: currentTime + 1000 // Show for 1 sec
+                        });
+                    }
+                });
+                foods = activeFoods;
+                missedFoods = missedFoods.filter(mf => mf.disappearTime > currentTime);
+
+                setLanguage(langSelect.value); // Update score/missed text
 
                 if (foods.length === 0 && !gameOver) {
+                    roundHue = (roundHue + 40) % 360;
                     placeFood();
                 }
 
@@ -265,202 +319,161 @@
                 for (let i = 1; i < snake.length; i++) {
                     if (head.x === snake[i].x && head.y === snake[i].y) {
                         gameOver = true;
-                    }
-                }
-                
-                // Eat food
-                let ateFood = false;
-                let eatenFoodColor = null;
-                for (let i = 0; i < foods.length; i++) {
-                    if (head.x === foods[i].x && head.y === foods[i].y) {
-                        score++;
-                        scoreEl.textContent = `${LANGS[langSelect.value].score}: ${score}`;
-                        eatenFoodColor = foods[i].color;
-                        placeFood();
-                        ateFood = true;
-                        if (score > 0 && score % 10 === 0) {
-                            triggerFireworks(3, eatenFoodColor);
-                        }
                         break;
                     }
                 }
+                if (gameOver) return;
                 
-                const tail = snake.pop();
                 snake.unshift(head);
 
-                if (ateFood) {
-                    tail.color = eatenFoodColor;
-                    snake.push(tail);
+                let ateFood = false;
+                foods.forEach((food, index) => {
+                    if (head.x === food.x && head.y === food.y) {
+                        ateFood = true;
+                        foods.splice(index, 1);
+                        score++;
+                        scoreEl.textContent = `${LANGS[langSelect.value].score}: ${score}`;
+
+                        const newSegmentColor = food.color;
+                        snake[snake.length -1].color = newSegmentColor;
+                        
+                        roundHue = (roundHue + 40) % 360;
+                        placeFood();
+                    }
+                });
+
+                if (!ateFood) {
+                    snake.pop();
                 }
                 
                 draw();
-                requestAnimationFrame(gameLoop);
-
             };
             
-            setTimeout(gameLogic, gameSpeed); 
+            gameLogic();
+
+            if (!gameOver) {
+                setTimeout(gameLoop, gameSpeed);
+            }
         }
 
         function draw() {
-            const currentTime = performance.now();
-            // Draw food
-            foods.forEach(f => {
-                const timeLeft = f.disappearTime - currentTime;
-                let show = true;
-                
-                // Blink when less than 1 second left
-                if (timeLeft < 1000) {
-                    // Slow blink
-                    show = Math.floor(currentTime / 250) % 2 === 0;
-                }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-                if (show) {
-                    ctx.fillStyle = f.color;
-                    const foodSize = cellSize * pixelSizeRatio;
-                    const foodOffset = (cellSize - foodSize) / 2;
-                    fillRoundRect(ctx, f.x * cellSize + foodOffset, f.y * cellSize + foodOffset, foodSize, foodSize, cellRadius);
+            // Draw missed foods
+            missedFoods.forEach(mf => {
+                drawCell(mf.x, mf.y, 'rgba(128, 128, 128, 0.4)');
+            });
+
+            // Draw food with blinking effect
+            const currentTime = performance.now();
+            foods.forEach(f => {
+                const remainingTime = f.disappearTime - currentTime;
+                const blink = remainingTime < 1500 && Math.floor(remainingTime / 250) % 2 === 0;
+                if (!blink) {
+                    drawCell(f.x, f.y, f.color);
                 }
             });
 
             // Draw snake
-            baseHue += 1;
-            snake.forEach((segment, index) => {
+            for (let i = 0; i < snake.length; i++) {
+                const segment = snake[i];
+                let color;
                 if (segment.color) {
-                    ctx.fillStyle = segment.color;
+                    color = segment.color;
                 } else {
-                    const hue = (baseHue + index * 10) % 360;
-                    ctx.fillStyle = `hsl(${hue}, 90%, 60%)`;
+                    const hue = (baseHue + i * 5) % 360;
+                    const saturation = 90 - (i * 2);
+                    const lightness = 60 - (i * 1);
+                    color = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
                 }
-                const segmentSize = cellSize * pixelSizeRatio;
-                const segmentOffset = (cellSize - segmentSize) / 2;
-                fillRoundRect(ctx, segment.x * cellSize + segmentOffset, segment.y * cellSize + segmentOffset, segmentSize, segmentSize, cellRadius);
-            });
+                drawCell(segment.x, segment.y, color);
+            }
+        }
+
+        function drawCell(x, y, color) {
+            const size = cellSize * pixelSizeRatio;
+            const gap = cellSize * (1 - pixelSizeRatio);
+            const px = x * cellSize + gap / 2;
+            const py = y * cellSize + gap / 2;
             
-            // Draw fireworks
-            ctx.save();
-            for (let i = fireworks.length - 1; i >= 0; i--) {
-                const fw = fireworks[i];
-                const elapsedTime = currentTime - fw.startTime;
-
-                if (elapsedTime > fw.duration) {
-                    fireworks.splice(i, 1);
-                    continue;
-                }
-
-                const maxRing = 3;
-                for (let ring = 0; ring <= maxRing; ring++) {
-                    const ringStartTime = ring * fw.ringDelay;
-                    if (elapsedTime >= ringStartTime) {
-                        const timeSinceRingStart = elapsedTime - ringStartTime;
-                        if (timeSinceRingStart < fw.ringDuration) {
-                            const alpha = 1.0 - (timeSinceRingStart / fw.ringDuration);
-                            drawExplosionRing(fw.cx, fw.cy, ring, fw.baseHue, alpha);
-                        }
-                    }
-                }
-            }
-            ctx.restore();
-        }
-
-        function drawExplosionRing(cx, cy, ring, baseHue, alpha) {
-            const ringHue = (baseHue + ring * 20) % 360;
-            const color = `hsl(${ringHue}, 90%, 70%)`;
             ctx.fillStyle = color;
-            ctx.globalAlpha = alpha;
-        
-            const drawCell = (x, y) => {
-                if (x >= 0 && x < gridSize && y >= 0 && y < gridSize) {
-                    const size = cellSize * pixelSizeRatio;
-                    const offset = (cellSize - size) / 2;
-                    fillRoundRect(ctx, x * cellSize + offset, y * cellSize + offset, size, size, cellRadius);
-                }
-            };
-        
-            if (ring === 0) {
-                drawCell(cx, cy);
-                return;
-            }
-        
-            for (let x = cx - ring; x <= cx + ring; x++) {
-                drawCell(x, cy - ring);
-                if (ring > 0) drawCell(x, cy + ring);
-            }
-            for (let y = cy - ring + 1; y < cy + ring; y++) {
-                drawCell(cx - ring, y);
-                if (ring > 0) drawCell(cx + ring, y);
+            if (pixelShape === 'square') {
+                ctx.fillRect(px, py, size, size);
+            } else {
+                fillRoundRect(ctx, px, py, size, size, cellRadius);
             }
         }
-
+        
         function fillRoundRect(ctx, x, y, w, h, r) {
-            if (r <= 0 || pixelShape === 'square') {
-                ctx.fillRect(x, y, w, h);
-                return;
-            }
+            if (w < 2 * r) r = w / 2;
+            if (h < 2 * r) r = h / 2;
             ctx.beginPath();
             ctx.moveTo(x + r, y);
-            ctx.lineTo(x + w - r, y);
-            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-            ctx.lineTo(x + w, y + h - r);
-            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-            ctx.lineTo(x + r, y + h);
-            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-            ctx.lineTo(x, y + r);
-            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.arcTo(x + w, y, x + w, y + h, r);
+            ctx.arcTo(x + w, y + h, x, y + h, r);
+            ctx.arcTo(x, y + h, x, y, r);
+            ctx.arcTo(x, y, x + w, y, r);
             ctx.closePath();
             ctx.fill();
-        }
-        
-        function triggerFireworks(count = 1, baseColor = null) {
-            for (let i = 0; i < count; i++) {
-                let hue = roundHue;
-                if (baseColor) {
-                    const match = baseColor.match(/hsl\((\d+)/);
-                    if (match) {
-                        hue = parseInt(match[1]);
-                    }
-                }
-        
-                fireworks.push({
-                    cx: Math.floor(Math.random() * gridSize),
-                    cy: Math.floor(Math.random() * gridSize),
-                    baseHue: hue,
-                    startTime: performance.now(),
-                    duration: 1000,
-                    ringDelay: 100,
-                    ringDuration: 600
-                });
-            }
         }
 
         document.addEventListener('keydown', e => {
             const key = e.key.toLowerCase();
-            if (key === 'w' && direction !== 'down') { direction = 'up'; dx = 0; dy = -1; }
-            if (key === 's' && direction !== 'up') { direction = 'down'; dx = 0; dy = 1; }
-            if (key === 'a' && direction !== 'right') { direction = 'left'; dx = -1; dy = 0; }
-            if (key === 'd' && direction !== 'left') { direction = 'right'; dx = 1; dy = 0; }
-            if (key === 'j') {
-                triggerFireworks(1);
+            let newDx = dx, newDy = dy;
+
+            if ((key === 'w' || key === 'arrowup') && direction !== 'down') {
+                newDx = 0; newDy = -1; direction = 'up';
+            } else if ((key === 's' || key === 'arrowdown') && direction !== 'up') {
+                newDx = 0; newDy = 1; direction = 'down';
+            } else if ((key === 'a' || key === 'arrowleft') && direction !== 'right') {
+                newDx = -1; newDy = 0; direction = 'left';
+            } else if ((key === 'd' || key === 'arrowright') && direction !== 'left') {
+                newDx = 1; newDy = 0; direction = 'right';
             }
+
+            // Prevent the snake from reversing onto itself in the same game tick
+            if (snake.length > 1) {
+                const nextX = snake[0].x + newDx;
+                const nextY = snake[0].y + newDy;
+                if (nextX === snake[1].x && nextY === snake[1].y) {
+                    return; // Ignore input that would cause immediate reversal
+                }
+            }
+            dx = newDx;
+            dy = newDy;
         });
 
-        langSelect.onchange = (e) => {
-            setLanguage(e.target.value);
-        };
+        langSelect.addEventListener('change', (e) => setLanguage(e.target.value));
+        
         shapeSelect.onchange = (e) => {
             pixelShape = e.target.value;
+            draw();
         };
         radiusSlider.oninput = function() {
             cellRadius = parseInt(this.value, 10);
             radiusVal.textContent = cellRadius;
+            draw();
         };
         pixelSizeSlider.oninput = function() {
             pixelSizeRatio = parseFloat(this.value);
             pixelSizeVal.textContent = pixelSizeRatio.toFixed(2);
+            draw();
         };
         speedSlider.oninput = function() {
             // Lower value on slider = faster speed = smaller timeout
             gameSpeed = 250 - (this.value * 20); 
             speedVal.textContent = this.value;
+            draw();
+        };
+
+        playBtn.onclick = () => {
+            if (isPaused) {
+                isPaused = false;
+            }
+        };
+
+        pauseBtn.onclick = () => {
+            isPaused = true;
         };
 
         gameOverEl.addEventListener('click', init);
